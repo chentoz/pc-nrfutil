@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019 Nordic Semiconductor ASA
+# Copyright (c) 2016 Nordic Semiconductor ASA
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without modification,
@@ -35,7 +35,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-def calc_crc16(binary_data: bytes, crc=0xffff):
+def calc_crc16(binary_data, crc=0xffff):
     """
     Calculates CRC16 on binary_data
 

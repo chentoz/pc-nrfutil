@@ -45,11 +45,13 @@ import tempfile
 
 # Nordic libraries
 from nordicsemi.dfu.package         import Package
+from nordicsemi.dfu.dfu_transport   import DfuEvent
+from nordicsemi.dfu.manifest        import SoftdeviceBootloaderFirmware
 
 logger = logging.getLogger(__name__)
 
 
-class Dfu:
+class Dfu(object):
     """ Class to handle upload of a new hex image to the device. """
 
     def __init__(self, zip_file_path, dfu_transport, connect_delay):

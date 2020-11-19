@@ -37,13 +37,15 @@
 
 # Python libraries
 import json
+import binascii
 import os
 
 # Nordic libraries
+from pc_ble_driver_py.exceptions import NotImplementedException
 from nordicsemi.dfu.model import HexType, FirmwareKeys
 
 
-class ManifestGenerator:
+class ManifestGenerator(object):
     def __init__(self, firmwares_data):
         """
         The Manifest Generator constructor. Needs a data structure to generate a manifest from.
@@ -81,7 +83,7 @@ class ManifestGenerator:
             elif key == HexType.SD_BL:
                 self.manifest.softdevice_bootloader = _firmware
             else:
-                raise NotImplementedError("Support for firmware type {0} not implemented yet.".format(key))
+                raise NotImplementedException("Support for firmware type {0} not implemented yet.".format(key))
 
         return self.to_json()
 
@@ -90,7 +92,7 @@ class ManifestGenerator:
             if not isinstance(d, dict):
                 return d
 
-            return dict((k, remove_none_entries(v)) for k, v in d.items() if v is not None)
+            return dict((k, remove_none_entries(v)) for k, v in d.iteritems() if v is not None)
 
         return json.dumps({'manifest': self.manifest},
                           default=lambda o: remove_none_entries(o.__dict__),
@@ -98,7 +100,7 @@ class ManifestGenerator:
                           separators=(',', ': '))
 
 
-class FWMetaData:
+class FWMetaData(object):
     def __init__(self,
                  is_debug=None,
                  hw_version=None,
@@ -126,7 +128,7 @@ class FWMetaData:
         self.bl_size = bl_size
 
 
-class Firmware:
+class Firmware(object):
     def __init__(self,
                  bin_file=None,
                  dat_file=None,
@@ -161,7 +163,7 @@ class SoftdeviceBootloaderFirmware(Firmware):
         :param int info_read_only_metadata: The metadata about this firwmare image
         :return: SoftdeviceBootloaderFirmware
         """
-        super().__init__(
+        super(SoftdeviceBootloaderFirmware, self).__init__(
             bin_file,
             dat_file,
             info_read_only_metadata)

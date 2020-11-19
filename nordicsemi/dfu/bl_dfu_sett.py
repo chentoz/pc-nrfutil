@@ -37,23 +37,24 @@
 
 # Python standard library
 import os
+import time
 import shutil
 import logging
 import tempfile
 import struct
 import binascii
-
-# 3rd party libraries
-import intelhex
+from enum import Enum
 
 # Nordic libraries
-from nordicsemi.dfu.nrfhex import nRFArch
+from nordicsemi.dfu import intelhex
+from nordicsemi.dfu.intelhex import IntelHexError
+from nordicsemi.dfu.nrfhex import *
 from nordicsemi.dfu.package import Package
 from pc_ble_driver_py.exceptions import NordicSemiException
 
 logger = logging.getLogger(__name__)
 
-class BLDFUSettingsStructV1:
+class BLDFUSettingsStructV1(object):
 
     def __init__(self, settings_address):
         self.bytes_count = 92
@@ -72,7 +73,7 @@ class BLDFUSettingsStructV1:
         self.last_addr         = settings_address + 0x5C
 
 
-class BLDFUSettingsStructV2:
+class BLDFUSettingsStructV2(object):
 
     def __init__(self, settings_address):
         self.bytes_count = 803 # Entire settings page
@@ -97,7 +98,7 @@ class BLDFUSettingsStructV2:
         self.last_addr            = settings_address + 0x322
 
 
-class BLDFUSettings:
+class BLDFUSettings(object):
     """ Class to abstract a bootloader and its settings """
 
     flash_page_51_sz      = 0x400
@@ -109,7 +110,8 @@ class BLDFUSettings:
     bl_sett_52840_addr    = 0x000FF000
     bl_sett_backup_offset = 0x1000
 
-    def __init__(self):
+
+    def __init__(self, ):
         """
         """
         # instantiate a hex object
@@ -162,9 +164,9 @@ class BLDFUSettings:
 
     def _calculate_crc32_from_hex(self, ih_object, start_addr=None, end_addr=None):
         list = []
-        if start_addr is None and end_addr is None:
+        if start_addr == None and end_addr == None:
             hex_dict = ih_object.todict()
-            for addr, byte in list(hex_dict.items()):
+            for addr, byte in hex_dict.items():
                 list.append(byte)
         else:
             for addr in range(start_addr, end_addr + 1):
@@ -173,7 +175,7 @@ class BLDFUSettings:
         return binascii.crc32(bytearray(list)) & 0xFFFFFFFF
 
     def generate(self, arch, app_file, app_ver, bl_ver, bl_sett_ver, custom_bl_sett_addr, no_backup,
-                 backup_address, app_boot_validation_type, sd_boot_validation_type, sd_file, signer):
+                 backup_address, app_boot_validation_type, sd_boot_validation_type, sd_file, key_file):
 
         self.set_arch(arch)
 
@@ -211,22 +213,21 @@ class BLDFUSettings:
                 self.app_boot_validation_bytes = struct.pack('<I', self.app_crc)
             elif app_boot_validation_type == 'VALIDATE_GENERATED_SHA256':
                 self.app_boot_validation_type = 2 & 0xffffffff
-                # Package.calculate_sha256_hash gives a reversed
-                # digest. It need to be reversed back to a normal
-                # sha256 digest.
-                self.app_boot_validation_bytes = Package.calculate_sha256_hash(self.app_bin)[::-1]
+                sha256 = Package.calculate_sha256_hash(self.app_bin)
+                self.app_boot_validation_bytes = bytearray([int(binascii.hexlify(i), 16) for i in list(sha256)][31::-1])
             elif app_boot_validation_type == 'VALIDATE_ECDSA_P256_SHA256':
                 self.app_boot_validation_type = 3 & 0xffffffff
-                self.app_boot_validation_bytes = Package.sign_firmware(signer, self.app_bin)
+                ecdsa = Package.sign_firmware(key_file, self.app_bin)
+                self.app_boot_validation_bytes = bytearray([int(binascii.hexlify(i), 16) for i in list(ecdsa)])
             else:  # This also covers 'NO_VALIDATION' case
                 self.app_boot_validation_type = 0 & 0xffffffff
-                self.app_boot_validation_bytes = bytes(0)
+                self.app_boot_validation_bytes = bytearray(0)
         else:
             self.app_sz = 0x0 & 0xffffffff
             self.app_crc = 0x0 & 0xffffffff
             self.bank0_bank_code = 0x0 & 0xffffffff
             self.app_boot_validation_type = 0x0 & 0xffffffff
-            self.app_boot_validation_bytes = bytes(0)
+            self.app_boot_validation_bytes = bytearray(0)
 
         if sd_file is not None:
             # Load SD to calculate CRC
@@ -251,34 +252,28 @@ class BLDFUSettings:
                 self.sd_boot_validation_bytes = struct.pack('<I', sd_crc)
             elif sd_boot_validation_type == 'VALIDATE_GENERATED_SHA256':
                 self.sd_boot_validation_type = 2 & 0xffffffff
-                # Package.calculate_sha256_hash gives a reversed
-                # digest. It need to be reversed back to a normal
-                # sha256 digest.
-                self.sd_boot_validation_bytes = Package.calculate_sha256_hash(self.sd_bin)[::-1]
+                sha256 = Package.calculate_sha256_hash(self.sd_bin)
+                self.sd_boot_validation_bytes = bytearray([int(binascii.hexlify(i), 16) for i in list(sha256)][31::-1])
             elif sd_boot_validation_type == 'VALIDATE_ECDSA_P256_SHA256':
                 self.sd_boot_validation_type = 3 & 0xffffffff
-                self.sd_boot_validation_bytes = Package.sign_firmware(signer, self.sd_bin)
+                ecdsa = Package.sign_firmware(key_file, self.sd_bin)
+                self.sd_boot_validation_bytes = bytearray([int(binascii.hexlify(i), 16) for i in list(ecdsa)])
             else:  # This also covers 'NO_VALIDATION_CASE'
                 self.sd_boot_validation_type = 0 & 0xffffffff
-                self.sd_boot_validation_bytes = bytes(0)
+                self.sd_boot_validation_bytes = bytearray(0)
         else:
             self.sd_sz = 0x0 & 0xffffffff
             self.sd_boot_validation_type = 0 & 0xffffffff
-            self.sd_boot_validation_bytes = bytes(0)
+            self.sd_boot_validation_bytes = bytearray(0)
 
-        # additional hardcoded values
+        # additional harcoded values
         self.bank_layout = 0x0 & 0xffffffff
         self.bank_current = 0x0 & 0xffffffff
 
         # Fill the entire settings page with 0's
         for offset in range(0, self.setts.bytes_count):
             self.ihex[self.bl_sett_addr + offset] = 0x00
-            
-        # Make sure the hex-file is 32bit-word-aligned
-        fill_bytes = ((self.setts.bytes_count + 4 - 1) & ~(4 - 1)) - self.setts.bytes_count
-        for offset in range(self.setts.bytes_count, self.setts.bytes_count + fill_bytes):
-            self.ihex[self.bl_sett_addr + offset] = 0xFF
-        
+
         self._add_value_tohex(self.setts.sett_ver, self.bl_sett_ver)
         self._add_value_tohex(self.setts.app_ver, self.app_ver)
         self._add_value_tohex(self.setts.bl_ver, self.bl_ver)
@@ -315,8 +310,6 @@ class BLDFUSettings:
         if not no_backup:
             for offset in range(0, self.setts.bytes_count):
                 self.ihex[self.backup_address + offset] = self.ihex[self.bl_sett_addr + offset]
-            for offset in range(self.setts.bytes_count, self.setts.bytes_count + fill_bytes):
-                self.ihex[self.backup_address + offset] = 0xFF
 
     def probe_settings(self, base):
         # Unpack CRC and version

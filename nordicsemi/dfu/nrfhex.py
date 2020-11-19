@@ -1,4 +1,5 @@
-# Copyright (c) 2016 - 2019 Nordic Semiconductor ASA
+#
+# Copyright (c) 2016 Nordic Semiconductor ASA
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without modification,
@@ -32,8 +33,9 @@
 # ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
 
-import intelhex
+from nordicsemi.dfu import intelhex
 from struct import unpack
 from enum import Enum
 
@@ -65,7 +67,7 @@ class nRFHex(intelhex.IntelHex):
         :param str bootloader: Optional file path to bootloader firmware
         :return: None
         """
-        super().__init__()
+        super(nRFHex, self).__init__()
         self.arch = arch
         self.file_format = 'hex'
 
@@ -83,6 +85,9 @@ class nRFHex(intelhex.IntelHex):
         if bootloader is not None:
             self.bootloaderhex = nRFHex(bootloader)
 
+    def tohexfile(self, dest):
+        pass
+
     def _removeuicr(self):
         uicr_start_address = 0x10000000
         maxaddress = self.maxaddr()
@@ -92,7 +97,7 @@ class nRFHex(intelhex.IntelHex):
 
     def _removembr(self):
         mbr_end_address = 0x1000
-        minaddress = super().minaddr()
+        minaddress = super(nRFHex, self).minaddr()
         if minaddress < mbr_end_address:
             for i in range(minaddress, mbr_end_address):
                 self._buf.pop(i, 0)
@@ -111,7 +116,7 @@ class nRFHex(intelhex.IntelHex):
         if self.address_has_magic_number(potential_magic_number_address):
             return "s1x0"
 
-        for i in range(4):
+        for i in xrange(4):
             potential_magic_number_address += nRFHex.info_struct_address_offset
 
             if self.address_has_magic_number(potential_magic_number_address):
@@ -128,7 +133,7 @@ class nRFHex(intelhex.IntelHex):
             return nRFHex.s1x0_mbr_end_address
 
     def minaddr(self):
-        min_address = super().minaddr()
+        min_address = super(nRFHex, self).minaddr()
 
         # Lower addresses are reserved for master boot record
         if self.file_format != 'bin':
@@ -148,7 +153,7 @@ class nRFHex(intelhex.IntelHex):
 
         # Round up to nearest word
         word_size = 4
-        number_of_words = (size + (word_size - 1)) // word_size
+        number_of_words = (size + (word_size - 1)) / word_size
         size = number_of_words * word_size
 
         return size
@@ -165,7 +170,7 @@ class nRFHex(intelhex.IntelHex):
 
     def tobinfile(self, fobj, start=None, end=None, pad=None, size=None):
         """
-        Writes a binary version of source and bootloader respectively to fobj which could be a
+        Writes a binary version of source and bootloader respectivly to fobj which could be a
         file object or a file path.
 
         :param str fobj: File path or object the function writes to
@@ -180,7 +185,7 @@ class nRFHex(intelhex.IntelHex):
 
         start_address = self.minaddr()
         size = self.size()
-        super().tobinfile(fobj, start=start_address, size=size)
+        super(nRFHex, self).tobinfile(fobj, start=start_address, size=size)
 
         if self.bootloaderhex is not None:
             self.bootloaderhex.tobinfile(fobj)

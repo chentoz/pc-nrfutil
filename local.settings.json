@@ -1,0 +1,63 @@
+{
+    "WebServices": {
+        "port": 8080,
+        "root": "../../web",
+        "index": "map.html",
+        "api": {
+            "Status": {}
+        }
+    },
+    "LocationServices": {
+        "port": 8081
+    },
+    "UpdateServices": {
+        "port": 8089
+    },
+    "Http": {
+        "port": 80
+    },
+    "MqttSNGateway": {
+        "port": 31337,
+        "nodejs": {
+	        "enable": true
+        },
+        "golang": {
+            "enable": false,
+            "executable": "mqttsngateway",
+            "workers": 1
+
+        }
+    },
+    "Mosquitto": {
+        "mqtt": {
+            "port": 43518,
+            "host": "localhost"
+        },
+        "websocket": {
+            "port": 31310,
+            "host": "spim-po.shenghongpec.com"
+        }
+    },
+    "Mosca": {
+        "mqtt": {
+            "port": 1884,
+            "backend": {}
+		},
+		"http": {
+            "port": 31309,
+            "bundle": true,
+            "static": "./"
+        },
+        "websocket": {
+            "port": 31309,
+            "host": "localhost",
+            "bundle": true,
+            "static": "./"
+        }
+    },
+    "Endpoints": {
+        "tiles": "spidersens.cn",
+        "locationEngine": "chentoz",
+	    "webService": "chentoz"
+    }
+}

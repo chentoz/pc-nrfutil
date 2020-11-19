@@ -1,4 +1,4 @@
-
+from __future__ import print_function
 #
 # Copyright (c) 2016 Nordic Semiconductor ASA
 # All rights reserved.
@@ -46,6 +46,7 @@
 # the file.
 
 import hashlib
+import binascii
 import datetime
 
 try:
@@ -55,6 +56,8 @@ try:
 except Exception:
     print("Failed to import ecdsa, cannot do signing")
 
+from pc_ble_driver_py.exceptions import InvalidArgumentException, IllegalStateException
+
 
 keys_default_pem = """-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIGvsrpXh8m/E9bj1dq/0o1aBPQVAFJQ6Pzusx685URE0oAoGCCqGSM49
@@ -62,7 +65,7 @@ AwEHoUQDQgAEaHYrUu/oFKIXN457GH+8IOuv6OIPBRLqoHjaEKM0wIzJZ0lhfO/A
 53hKGjKEjYT3VNTQ3Zq1YB3o5QSQMP/LRg==
 -----END EC PRIVATE KEY-----"""
 
-class Signing:
+class Signing(object):
     """
     Class for singing of hex-files
     """
@@ -72,7 +75,7 @@ class Signing:
         """
         self.sk = SigningKey.generate(curve=NIST256p)
 
-        with open(filename, "wb") as sk_file:
+        with open(filename, "w") as sk_file:
             sk_file.write(self.sk.to_pem())
 
     def load_key(self, filename):
@@ -85,6 +88,8 @@ class Signing:
             sk_pem = sk_file.read()
 
         self.sk = SigningKey.from_pem(sk_pem)
+
+        sk_hex = "".join(c.encode('hex') for c in self.sk.to_string())
         return default_sk.to_string() == self.sk.to_string()
 
     def sign(self, init_packet_data):
@@ -94,7 +99,7 @@ class Signing:
         """
         # Add assertion of init_packet
         if self.sk is None:
-            raise AssertionError("Can't save key. No key created/loaded")
+            raise IllegalStateException("Can't save key. No key created/loaded")
 
         # Sign the init-packet
         signature = self.sk.sign(init_packet_data, hashfunc=hashlib.sha256, sigencode=sigencode_string)
@@ -106,7 +111,7 @@ class Signing:
         """
         # Add assertion of init_packet
         if self.sk is None:
-            raise AssertionError("Can't save key. No key created/loaded")
+            raise IllegalStateException("Can't save key. No key created/loaded")
 
         vk = self.sk.get_verifying_key()
 
@@ -118,15 +123,15 @@ class Signing:
 
         return True
 
-    def get_vk(self, output_type, dbg) -> str:
+    def get_vk(self, output_type, dbg):
         """
         Get public key (as hex, code or pem)
         """
         if self.sk is None:
-            raise AssertionError("Can't get key. No key created/loaded")
+            raise IllegalStateException("Can't get key. No key created/loaded")
 
         if output_type is None:
-            raise ValueError("Invalid output type for public key.")
+            raise InvalidArgumentException("Invalid output type for public key.")
         elif output_type == 'hex':
             return self.get_vk_hex()
         elif output_type == 'code':
@@ -134,56 +139,67 @@ class Signing:
         elif output_type == 'pem':
             return self.get_vk_pem()
         else:
-            raise ValueError("Invalid argument. Can't get key")
+            raise InvalidArgumentException("Invalid argument. Can't get key")
 
-    def get_sk(self, output_type, dbg) -> str:
+    def get_sk(self, output_type, dbg):
         """
         Get private key (as hex, code or pem)
         """
         if self.sk is None:
-            raise AssertionError("Can't get key. No key created/loaded")
+            raise IllegalStateException("Can't get key. No key created/loaded")
 
         if output_type is None:
-            raise ValueError("Invalid output type for private key.")
+            raise InvalidArgumentException("Invalid output type for private key.")
         elif output_type == 'hex':
             return self.get_sk_hex()
         elif output_type == 'code':
-            raise ValueError("Private key cannot be shown as code")
+            raise InvalidArgumentException("Private key cannot be shown as code")
         elif output_type == 'pem':
-            # Return pem as str to conform in type with the other cases.
-            return self.sk.to_pem().decode()
+            return self.sk.to_pem()
         else:
-            raise ValueError("Invalid argument. Can't get key")
+            raise InvalidArgumentException("Invalid argument. Can't get key")
 
     def get_sk_hex(self):
         """
         Get the verification key as hex
         """
         if self.sk is None:
-            raise AssertionError("Can't get key. No key created/loaded")
+            raise IllegalStateException("Can't get key. No key created/loaded")
 
-        # Reverse the key for display. This emulates a memory
-        # dump of the key interpreted a 256bit little endian
-        # integer.
-        key = self.sk.to_string()
-        displayed_key = key[::-1].hex()
+        sk_hexlify = binascii.hexlify(self.sk.to_string())
 
-        return f"Private (signing) key sk:\n{displayed_key}"
+        sk_hexlify_list = []
+        for i in xrange(len(sk_hexlify)-2, -2, -2):
+            sk_hexlify_list.append(sk_hexlify[i:i+2])
+
+        sk_hexlify_list_str = ''.join(sk_hexlify_list)
+
+        vk_hex = "Private (signing) key sk:\n{0}".format(sk_hexlify_list_str)
+
+        return vk_hex
 
     def get_vk_hex(self):
         """
         Get the verification key as hex
         """
         if self.sk is None:
-            raise AssertionError("Can't get key. No key created/loaded")
+            raise IllegalStateException("Can't get key. No key created/loaded")
 
-        # Reverse the two halves of key for display. This
-        # emulates a memory dump of the key interpreted as two
-        # 256bit little endian integers.
-        key = self.sk.get_verifying_key().to_string()
-        displayed_key = (key[:32][::-1] + key[32:][::-1]).hex()
+        vk = self.sk.get_verifying_key()
+        vk_hexlify = binascii.hexlify(vk.to_string())
 
-        return f"Public (verification) key pk:\n{displayed_key}"
+        vk_hexlify_list = []
+        for i in xrange(len(vk_hexlify[0:64])-2, -2, -2):
+            vk_hexlify_list.append(vk_hexlify[i:i+2])
+
+        for i in xrange(len(vk_hexlify)-2, 62, -2):
+            vk_hexlify_list.append(vk_hexlify[i:i+2])
+
+        vk_hexlify_list_str = ''.join(vk_hexlify_list)
+
+        vk_hex = "Public (verification) key pk:\n{0}".format(vk_hexlify_list_str)
+
+        return vk_hex
 
     def wrap_code(self, key_code, dbg):
 
@@ -194,13 +210,13 @@ class Signing:
 #include "compiler_abstraction.h"
 """.format(datetime.datetime.now().strftime("%Y-%m-%d (YY-MM-DD) at %H:%M:%S"))
 
-        dbg_header = """
-/* This file was generated with a throwaway private key, that is only intended for a debug version of the DFU project.
+        dbg_header="""
+/* This file was generated with a throwaway private key, that is only inteded for a debug version of the DFU project.
   Please see https://github.com/NordicSemiconductor/pc-nrfutil/blob/master/README.md to generate a valid public key. */
 
-#ifdef NRF_DFU_DEBUG_VERSION
+#ifdef NRF_DFU_DEBUG_VERSION 
 """
-        dbg_footer = """
+        dbg_footer="""
 #else
 #error "Debug public key not valid for production. Please see https://github.com/NordicSemiconductor/pc-nrfutil/blob/master/README.md to generate it"
 #endif
@@ -217,21 +233,27 @@ class Signing:
         Get the verification key as code
         """
         if self.sk is None:
-            raise AssertionError("Can't get key. No key created/loaded")
+            raise IllegalStateException("Can't get key. No key created/loaded")
 
-        to_two_digit_hex_with_0x = '0x{0:02x}'.format
+        vk = self.sk.get_verifying_key()
+        vk_hex = binascii.hexlify(vk.to_string())
 
-        key = self.sk.get_verifying_key().to_string()
-        vk_x_separated = ', '.join(map(to_two_digit_hex_with_0x,
-                                       key[:32][::-1]))
-        vk_y_separated = ', '.join(map(to_two_digit_hex_with_0x,
-                                       key[32:][::-1]))
+        vk_x_separated = ""
+        vk_x_str = vk_hex[0:64]
+        for i in xrange(0, len(vk_x_str), 2):
+            vk_x_separated = "0x" + vk_x_str[i:i+2] + ", " + vk_x_separated
 
-        key_code = """
+        vk_y_separated = ""
+        vk_y_str = vk_hex[64:128]
+        for i in xrange(0, len(vk_y_str), 2):
+            vk_y_separated = "0x" + vk_y_str[i:i+2] + ", " + vk_y_separated
+        vk_y_separated = vk_y_separated[:-2]
+        
+        key_code ="""
 /** @brief Public key used to verify DFU images */
 __ALIGN(4) const uint8_t pk[64] =
 {{
-    {0},
+    {0}
     {1}
 }};
 """
@@ -240,15 +262,14 @@ __ALIGN(4) const uint8_t pk[64] =
 
         return vk_code
 
-    def get_vk_pem(self) -> str:
+    def get_vk_pem(self):
         """
         Get the verification key as PEM
         """
         if self.sk is None:
-            raise AssertionError("Can't get key. No key created/loaded")
+            raise IllegalStateException("Can't get key. No key created/loaded")
 
         vk = self.sk.get_verifying_key()
         vk_pem = vk.to_pem()
 
-        # Return pem as str to conform in type with the other cases.
-        return vk_pem.decode()
+        return vk_pem

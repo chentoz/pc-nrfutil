@@ -1,4 +1,4 @@
-
+from __future__ import absolute_import
 #
 # Copyright (c) 2016 Nordic Semiconductor ASA
 # All rights reserved.
@@ -49,12 +49,13 @@ import hashlib
 
 
 # Nordic libraries
-from nordicsemi.dfu.nrfhex import nRFHex
-from nordicsemi.dfu.init_packet_pb import InitPacketPB, DFUType, CommandTypes, ValidationTypes, SigningTypes, HashTypes
+from pc_ble_driver_py.exceptions import NordicSemiException
+from nordicsemi.dfu.nrfhex import *
+from nordicsemi.dfu.init_packet_pb import *
 from nordicsemi.dfu.manifest import ManifestGenerator, Manifest
 from nordicsemi.dfu.model import HexType, FirmwareKeys
-from nordicsemi.dfu.crc16 import calc_crc16
-from nordicsemi.zigbee.ota_file import OTA_file
+from nordicsemi.dfu.crc16 import *
+from nordicsemi.zigbee.ota_file import *
 
 from .signing import Signing
 
@@ -66,8 +67,6 @@ HexTypeToInitPacketFwTypemap = {
     HexType.EXTERNAL_APPLICATION:   DFUType.EXTERNAL_APPLICATION
 }
 
-class PackageException(Exception):
-    pass
 
 class PacketField(Enum):
     DEBUG_MODE = 1
@@ -75,7 +74,7 @@ class PacketField(Enum):
     FW_VERSION = 3
     REQUIRED_SOFTDEVICES_ARRAY = 4
 
-class Package:
+class Package(object):
     """
         Packages and unpacks Nordic DFU packages. Nordic DFU packages are zip files that contains firmware and meta-information
         necessary for utilities to perform a DFU on nRF5X devices.
@@ -127,14 +126,12 @@ class Package:
                  softdevice_fw=None,
                  sd_boot_validation=DEFAULT_BOOT_VALIDATION_TYPE,
                  app_boot_validation=DEFAULT_BOOT_VALIDATION_TYPE,
-                 signer=None,
+                 key_file=None,
                  is_external=False,
                  zigbee_format=False,
                  manufacturer_id=0,
                  image_type=0,
-                 comment='',
-                 zigbee_ota_min_hw_version=None,
-                 zigbee_ota_max_hw_version=None):
+                 comment=''):
 
         """
         Constructor that requires values used for generating a Nordic DFU package.
@@ -148,9 +145,7 @@ class Package:
         :param str app_fw: Path to application firmware file
         :param str bootloader_fw: Path to bootloader firmware file
         :param str softdevice_fw: Path to softdevice firmware file
-        :param Signing signer: Instance of Signing() for Signing key file (PEM)
-        :param int zigbee_ota_min_hw_version: Minimal zigbee ota hardware version
-        :param int zigbee_ota_max_hw_version: Maximum zigbee ota hardware version
+        :param str key_file: Path to Signing key file (PEM)
         :return: None
         """
 
@@ -201,8 +196,7 @@ class Package:
                                      boot_validation_type=sd_boot_validation_type,
                                      init_packet_data=init_packet_vars)
 
-        assert(not signer or isinstance(signer, Signing))
-        self.signer = signer
+        self.key_file = key_file
 
         self.work_dir = None
         self.manifest = None
@@ -212,8 +206,6 @@ class Package:
             self.image_type = image_type
             self.manufacturer_id = manufacturer_id
             self.comment = comment
-            self.zigbee_ota_min_hw_version = zigbee_ota_min_hw_version
-            self.zigbee_ota_max_hw_version = zigbee_ota_max_hw_version
         else:
             self.is_zigbee = False
             self.image_type = None
@@ -243,11 +235,11 @@ class Package:
         self.zip_file = filename
         self.zip_dir  = os.path.join(self.work_dir, 'unpacked_zip')
         self.manifest = Package.unpack_package(filename, self.zip_dir)
-
+        
         self.rm_work_dir(preserve_work_dir)
 
     def image_str(self, index, hex_type, img):
-        type_strs = {HexType.SD_BL : "sd_bl",
+        type_strs = {HexType.SD_BL : "sd_bl", 
                     HexType.SOFTDEVICE : "softdevice",
                     HexType.BOOTLOADER : "bootloader",
                     HexType.APPLICATION : "application",
@@ -331,7 +323,7 @@ class Package:
         return s
 
     def __str__(self):
-
+        
         imgs = ""
         i = 0
         if self.manifest.softdevice_bootloader:
@@ -408,7 +400,7 @@ DFU Package: <{0}>:
             sd_bin_path = os.path.join(self.work_dir, sd_bin)
             sd_bin_created = True
 
-        for key, firmware_data in self.firmwares_data.items():
+        for key, firmware_data in self.firmwares_data.iteritems():
 
             # Normalize the firmware file and store it in the work directory
             firmware_data[FirmwareKeys.BIN_FILENAME] = \
@@ -437,11 +429,11 @@ DFU Package: <{0}>:
             for x in boot_validation_type_array:
                 if x  == ValidationTypes.VALIDATE_ECDSA_P256_SHA256:
                     if key == HexType.SD_BL:
-                        boot_validation_bytes_array.append(Package.sign_firmware(self.signer, sd_bin_path))
+                        boot_validation_bytes_array.append(Package.sign_firmware(self.key_file, sd_bin_path))
                     else:
-                        boot_validation_bytes_array.append(Package.sign_firmware(self.signer, bin_file_path))
+                        boot_validation_bytes_array.append(Package.sign_firmware(self.key_file, bin_file_path))
                 else:
-                    boot_validation_bytes_array.append(b'')
+                    boot_validation_bytes_array.append('')
 
 
             init_packet = InitPacketPB(
@@ -459,8 +451,10 @@ DFU Package: <{0}>:
                             bl_size=bl_size,
                             sd_req=firmware_data[FirmwareKeys.INIT_PACKET_DATA][PacketField.REQUIRED_SOFTDEVICES_ARRAY])
 
-            if (self.signer is not None):
-                signature = self.signer.sign(init_packet.get_init_command_bytes())
+            if (self.key_file is not None):
+                signer = Signing()
+                signer.load_key(self.key_file)
+                signature = signer.sign(init_packet.get_init_command_bytes())
                 init_packet.set_signature(signature, SigningTypes.ECDSA_P256_SHA256)
 
             # Store the .dat file in the work directory
@@ -485,9 +479,7 @@ DFU Package: <{0}>:
                                                 bytes(open(file_name, 'rb').read()),
                                                 self.manufacturer_id,
                                                 self.image_type,
-                                                self.comment,
-                                                self.zigbee_ota_min_hw_version,
-                                                self.zigbee_ota_max_hw_version)
+                                                self.comment)
 
                 ota_file_handle = open(self.zigbee_ota_file.filename, 'wb')
                 ota_file_handle.write(self.zigbee_ota_file.binary)
@@ -569,14 +561,15 @@ DFU Package: <{0}>:
         elif crc == 32:
             return binascii.crc32(data_buffer)
         else:
-            raise ValueError("Invalid CRC type")
+            raise NordicSemiException("Invalid CRC type")
 
     @staticmethod
-    def sign_firmware(signer, firmware_filename):
-        assert(isinstance(signer, Signing))
+    def sign_firmware(key, firmware_filename):
         data_buffer = b''
         with open(firmware_filename, 'rb') as firmware_file:
             data_buffer = firmware_file.read()
+        signer = Signing()
+        signer.load_key(key)
         return signer.sign(data_buffer)
 
     def create_manifest(self):
@@ -598,7 +591,7 @@ DFU Package: <{0}>:
         if firmware_type == HexType.SD_BL:
             self.firmwares_data[firmware_type][FirmwareKeys.SD_SIZE] = sd_size
             self.firmwares_data[firmware_type][FirmwareKeys.BL_SIZE] = bl_size
-
+        
         if firmware_version is not None:
             self.firmwares_data[firmware_type][FirmwareKeys.INIT_PACKET_DATA][PacketField.FW_VERSION] = firmware_version
 
@@ -626,19 +619,19 @@ DFU Package: <{0}>:
         """
 
         if not os.path.isfile(package_path):
-            raise PackageException("Package {0} not found.".format(package_path))
+            raise NordicSemiException("Package {0} not found.".format(package_path))
 
         target_dir = os.path.abspath(target_dir)
         target_base_path = os.path.dirname(target_dir)
 
         if not os.path.exists(target_base_path):
-            raise PackageException("Base path to target directory {0} does not exist.".format(target_base_path))
+            raise NordicSemiException("Base path to target directory {0} does not exist.".format(target_base_path))
 
         if not os.path.isdir(target_base_path):
-            raise PackageException("Base path to target directory {0} is not a directory.".format(target_base_path))
+            raise NordicSemiException("Base path to target directory {0} is not a directory.".format(target_base_path))
 
         if os.path.exists(target_dir):
-            raise PackageException(
+            raise NordicSemiException(
                 "Target directory {0} exists, not able to unpack to that directory.",
                 target_dir)
 

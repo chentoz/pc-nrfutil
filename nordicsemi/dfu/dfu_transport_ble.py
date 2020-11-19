@@ -36,18 +36,21 @@
 #
 
 # Python standard library
+import os
+import sys
 import time
 import wrapt
-import queue
+import Queue
 import struct
 import logging
 import binascii
 
+from types                          import NoneType
 from nordicsemi.dfu.dfu_transport   import DfuTransport, DfuEvent
 from pc_ble_driver_py.exceptions    import NordicSemiException, IllegalStateException
 from pc_ble_driver_py.ble_driver    import BLEDriver, BLEDriverObserver, BLEEnableParams, BLEUUIDBase, BLEGapSecKDist, BLEGapSecParams, \
-    BLEGapIOCaps, BLEUUID, BLEAdvData, BLEGapConnParams, NordicSemiErrorCheck, BLEGapSecStatus, driver
-from pc_ble_driver_py.ble_driver    import ATT_MTU_DEFAULT, BLEConfig, BLEConfigConnGatt, BLEConfigConnGap
+    BLEGapIOCaps, BLEUUID, BLEAdvData, BLEGapConnParams, BLEEvtID, BLEGattHVXType, NordicSemiErrorCheck, BLEGapSecStatus, driver
+from pc_ble_driver_py.ble_driver    import ATT_MTU_DEFAULT
 from pc_ble_driver_py.ble_adapter   import BLEAdapter, BLEAdapterObserver, EvtSync
 
 logger  = logging.getLogger(__name__)
@@ -84,7 +87,7 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
     LOCAL_ATT_MTU         = 247
 
     def __init__(self, adapter, bonded=False, keyset=None):
-        super().__init__()
+        super(DFUAdapter, self).__init__()
 
         self.evt_sync           = EvtSync(['connected', 'disconnected', 'sec_params',
                                            'auth_status', 'conn_sec_update'])
@@ -92,8 +95,8 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
         self.adapter            = adapter
         self.bonded             = bonded
         self.keyset             = keyset
-        self.notifications_q    = queue.Queue()
-        self.indication_q       = queue.Queue()
+        self.notifications_q    = Queue.Queue()
+        self.indication_q       = Queue.Queue()
         self.att_mtu            = ATT_MTU_DEFAULT
         self.packet_size        = self.att_mtu - 3
         self.adapter.observer_register(self)
@@ -101,30 +104,16 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
 
     def open(self):
         self.adapter.driver.open()
+        ble_enable_params = BLEEnableParams(vs_uuid_count      = 10,
+                                            service_changed    = True,
+                                            periph_conn_count  = 0,
+                                            central_conn_count = 1,
+                                            central_sec_count  = 1)
+        if nrf_sd_ble_api_ver >= 3:
+            logger.info("\nBLE: ble_enable with local ATT MTU: {}".format(DFUAdapter.LOCAL_ATT_MTU))
+            ble_enable_params.att_mtu = DFUAdapter.LOCAL_ATT_MTU
 
-        assert nrf_sd_ble_api_ver in [2, 5]
-
-        if nrf_sd_ble_api_ver == 2:
-            self.adapter.driver.ble_enable(
-                BLEEnableParams(
-                    vs_uuid_count = 10,
-                    service_changed = True,
-                    periph_conn_count = 0,
-                    central_conn_count = 1,
-                    central_sec_count = 1,
-                )
-            )
-
-        if nrf_sd_ble_api_ver == 5:
-            self.adapter.driver.ble_cfg_set(
-                BLEConfig.conn_gatt,
-                BLEConfigConnGatt(att_mtu=DFUAdapter.LOCAL_ATT_MTU),
-            )
-            self.adapter.driver.ble_cfg_set(
-                BLEConfig.conn_gap,
-                BLEConfigConnGap(event_length=5))  # Event length 5 is required for max data length
-            self.adapter.driver.ble_enable()
-
+        self.adapter.driver.ble_enable(ble_enable_params)
         self.adapter.driver.ble_vs_uuid_add(DFUAdapter.BASE_UUID)
 
     def close(self):
@@ -170,14 +159,7 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
         if nrf_sd_ble_api_ver >= 3:
             if DFUAdapter.LOCAL_ATT_MTU > ATT_MTU_DEFAULT:
                 logger.info('BLE: Enabling longer ATT MTUs')
-                self.att_mtu = self.adapter.att_mtu_exchange(self.conn_handle, DFUAdapter.LOCAL_ATT_MTU)
-
-                logger.info('BLE: Enabling longer Data Length')
-                max_data_length = 251  # Max data length for SD v5
-                data_length = self.att_mtu + 4  # ATT PDU overhead is 4
-                if data_length > max_data_length:
-                    data_length = max_data_length
-                self.adapter.data_length_update(self.conn_handle, data_length)
+                self.att_mtu = self.adapter.att_mtu_exchange(self.conn_handle)
             else:
                 logger.info('BLE: Using default ATT MTU')
 
@@ -249,8 +231,7 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
                 time.sleep(1)
 
                 self.adapter.connect(address=self.target_device_addr_type,
-                                     conn_params=self.conn_params,
-                                     tag=1)
+                                     conn_params=self.conn_params)
                 self.conn_handle = self.evt_sync.wait('connected')
                 retries -= 1
             else:
@@ -390,12 +371,7 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
                                                 slave_latency        = 0)
             logger.info('BLE: Found target advertiser, address: 0x{}, name: {}'.format(address_string, dev_name))
             logger.info('BLE: Connecting to 0x{}'.format(address_string))
-            # Connect must specify tag=1 to enable the settings
-            # set with BLEConfigConnGatt (that implicitly operates
-            # on connections with tag 1) to allow for larger MTU.
-            self.adapter.connect(address=peer_addr,
-                                 conn_params=self.conn_params,
-                                 tag=1)
+            self.adapter.connect(address = peer_addr, conn_params = self.conn_params)
             # store the address for subsequent connections
             self.target_device_addr = address_string
             self.target_device_addr_type = peer_addr
@@ -413,22 +389,25 @@ class DFUAdapter(BLEDriverObserver, BLEAdapterObserver):
             return
         self.indication_q.put(data)
 
-    def on_gattc_evt_exchange_mtu_rsp(self, ble_driver, conn_handle, *, status, att_mtu):
+    def on_att_mtu_exchanged(self, ble_driver, conn_handle, att_mtu):
         logger.info('ATT MTU exchanged: conn_handle={} att_mtu={}'.format(conn_handle, att_mtu))
         self.att_mtu = att_mtu
         self.packet_size = att_mtu - 3
 
+    def on_gattc_evt_exchange_mtu_rsp(self, ble_driver, conn_handle, **kwargs):
+        pass
+
 
 class DfuBLEDriver(BLEDriver):
     def __init__(self, serial_port, baud_rate=115200, auto_flash=False):
-        super().__init__(serial_port, baud_rate)
+        super(DfuBLEDriver, self).__init__(serial_port, baud_rate)
 
     @NordicSemiErrorCheck
     @wrapt.synchronized(BLEDriver.api_lock)
     def ble_gap_sec_params_reply(self, conn_handle, sec_status, sec_params, own_keys, peer_keys):
         assert isinstance(sec_status, BLEGapSecStatus), 'Invalid argument type'
-        assert sec_params is None or isinstance(sec_params, BLEGapSecParams), 'Invalid argument type'
-        assert peer_keys is None, 'NOT IMPLEMENTED'
+        assert isinstance(sec_params, (BLEGapSecParams, NoneType)), 'Invalid argument type'
+        assert isinstance(peer_keys, NoneType), 'NOT IMPLEMENTED'
 
         return driver.sd_ble_gap_sec_params_reply(self.rpc_adapter,
                                                   conn_handle,
@@ -447,9 +426,9 @@ class DfuTransportBle(DfuTransport):
                  att_mtu,
                  target_device_name=None,
                  target_device_addr=None,
-                 baud_rate=1000000,
+                 baud_rate=115200,
                  prn=0):
-        super().__init__()
+        super(DfuTransportBle, self).__init__()
         DFUAdapter.LOCAL_ATT_MTU = att_mtu
         self.baud_rate          = baud_rate
         self.serial_port        = serial_port
@@ -466,7 +445,7 @@ class DfuTransportBle(DfuTransport):
         if self.dfu_adapter:
             raise IllegalStateException('DFU Adapter is already open')
 
-        super().open()
+        super(DfuTransportBle, self).open()
         driver           = DfuBLEDriver(serial_port = self.serial_port,
                                         baud_rate   = self.baud_rate)
         adapter          = BLEAdapter(driver)
@@ -485,7 +464,7 @@ class DfuTransportBle(DfuTransport):
 
         if not self.dfu_adapter:
             raise IllegalStateException('DFU Adapter is already closed')
-        super().close()
+        super(DfuTransportBle, self).close()
         self.dfu_adapter.close()
         self.dfu_adapter = None
 
@@ -581,7 +560,7 @@ class DfuTransportBle(DfuTransport):
 
     def __set_prn(self):
         logger.debug("BLE: Set Packet Receipt Notification {}".format(self.prn))
-        self.dfu_adapter.write_control_point([DfuTransportBle.OP_CODE['SetPRN']] + list(struct.pack('<H', self.prn)))
+        self.dfu_adapter.write_control_point([DfuTransportBle.OP_CODE['SetPRN']] + map(ord, struct.pack('<H', self.prn)))
         self.__get_response(DfuTransportBle.OP_CODE['SetPRN'])
 
     def __create_command(self, size):
@@ -592,7 +571,7 @@ class DfuTransportBle(DfuTransport):
 
     def __create_object(self, object_type, size):
         self.dfu_adapter.write_control_point([DfuTransportBle.OP_CODE['CreateObject'], object_type]\
-                                            + list(struct.pack('<L', size)))
+                                            + map(ord, struct.pack('<L', size)))
         self.__get_response(DfuTransportBle.OP_CODE['CreateObject'])
 
     def __calculate_checksum(self):
@@ -632,15 +611,15 @@ class DfuTransportBle(DfuTransport):
         def validate_crc():
             if (crc != response['crc']):
                 raise ValidationException('Failed CRC validation.\n'\
-                                + 'Expected: {} Received: {}.'.format(crc, response['crc']))
+                                + 'Expected: {} Recieved: {}.'.format(crc, response['crc']))
             if (offset != response['offset']):
                 raise ValidationException('Failed offset validation.\n'\
-                                + 'Expected: {} Received: {}.'.format(offset, response['offset']))
+                                + 'Expected: {} Recieved: {}.'.format(offset, response['offset']))
 
         current_pnr = 0
         for i in range(0, len(data), self.dfu_adapter.packet_size):
             to_transmit     = data[i:i + self.dfu_adapter.packet_size]
-            self.dfu_adapter.write_data_point(list(to_transmit))
+            self.dfu_adapter.write_data_point(map(ord, to_transmit))
             crc     = binascii.crc32(to_transmit, crc) & 0xFFFFFFFF
             offset += len(to_transmit)
             current_pnr    += 1
@@ -656,11 +635,11 @@ class DfuTransportBle(DfuTransport):
 
     def __get_response(self, operation):
         def get_dict_key(dictionary, value):
-            return next((key for key, val in list(dictionary.items()) if val == value), None)
+            return next((key for key, val in dictionary.items() if val == value), None)
 
         try:
             resp = self.dfu_adapter.notifications_q.get(timeout=DfuTransportBle.DEFAULT_TIMEOUT)
-        except queue.Empty:
+        except Queue.Empty:
             raise NordicSemiException('Timeout: operation - {}'.format(get_dict_key(DfuTransportBle.OP_CODE,
                                                                                     operation)))
 
